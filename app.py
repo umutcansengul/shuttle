@@ -4,55 +4,73 @@ import pandas as pd
 from datetime import datetime, timedelta, date
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="Shuttle App", layout="wide")
+st.set_page_config(page_title="Shuttle App", page_icon="🚌", layout="wide")
 
 # Connect to Google Sheets
-conn = st.connection("gsheets", type=GSheetsConnection)
+# This looks for [connections.gsheets] in your .streamlit/secrets.toml
+try:
+    conn = st.connection("gsheets", type=GSheetsConnection)
+except Exception as e:
+    st.error("❌ Connection Error: Could not connect to Google Sheets. Please check your Secrets configuration.")
+    st.stop()
 
 # --- HELPER FUNCTIONS ---
-def change_password(username, old_pass, new_pass):
-    # 1. Get all users
-    users_df = get_data("Users")
-    
-    # 2. Find the specific user row
-    # We verify the OLD password matches before changing anything
-    user_idx = users_df.index[
-        (users_df['Username'] == username) & 
-        (users_df['Password'] == old_pass)
-    ].tolist()
-    
-    if not user_idx:
-        return False, "❌ Old password is incorrect."
-    
-    # 3. Update the password
-    # We use .at to update a specific cell (Row Index, Column Name)
-    users_df.at[user_idx[0], 'Password'] = new_pass
-    
-    # 4. Save back to Google Sheets
-    update_data(users_df, "Users")
-    return True, "✅ Password changed successfully!"
 
 def get_data(worksheet_name):
-    # Reads data and ensures it's fresh (ttl=0)
-    return conn.read(worksheet=worksheet_name, ttl=0)
+    """Fetches data from a specific worksheet."""
+    try:
+        # ttl=0 ensures we don't serve old cached data
+        df = conn.read(worksheet=worksheet_name, ttl=0)
+        return df
+    except Exception as e:
+        st.error(f"Error reading {worksheet_name}: {e}")
+        return pd.DataFrame()
 
 def update_data(df, worksheet_name):
-    conn.update(worksheet=worksheet_name, data=df)
-    st.cache_data.clear() # Clear cache to show updates immediately
+    """Updates the worksheet with the provided DataFrame."""
+    try:
+        conn.update(worksheet=worksheet_name, data=df)
+        st.cache_data.clear() # Clear cache to force reload next time
+    except Exception as e:
+        st.error(f"Error updating {worksheet_name}: {e}")
 
 def login_user(username, password):
+    """Verifies username and password against the Users sheet."""
     users = get_data("Users")
-    # Simple check
+    if users.empty:
+        return None
+    
+    # Ensure columns are strings to avoid type mismatch
+    users['Username'] = users['Username'].astype(str)
+    users['Password'] = users['Password'].astype(str)
+    
     user_row = users[(users['Username'] == username) & (users['Password'] == password)]
+    
     if not user_row.empty:
         return user_row.iloc[0]['Role']
     return None
 
+def change_password(username, old_pass, new_pass):
+    """Updates the password for a user."""
+    users_df = get_data("Users")
+    
+    # Find user
+    mask = (users_df['Username'] == username) & (users_df['Password'] == old_pass)
+    
+    if not users_df[mask].empty:
+        # Update the password
+        users_df.loc[mask, 'Password'] = new_pass
+        update_data(users_df, "Users")
+        return True, "✅ Password changed successfully!"
+    else:
+        return False, "❌ Old password is incorrect."
+
 # --- UI SECTIONS ---
 
 def login_screen():
-    st.header("🚌 Shuttle Login")
-    with st.form("login"):
+    st.title("🚌 Shuttle App Login")
+    
+    with st.form("login_form"):
         username = st.text_input("Username")
         password = st.text_input("Password", type="password")
         submitted = st.form_submit_button("Log In")
@@ -64,23 +82,30 @@ def login_screen():
                 st.session_state['username'] = username
                 st.rerun()
             else:
-                st.error("Invalid username or password")
+                st.error("Invalid username or password.")
 
 def admin_dashboard():
     st.title("Admin Dashboard 🛠️")
-    st.sidebar.button("Logout", on_click=lambda: st.session_state.clear())
+    st.sidebar.write(f"Logged in as: **{st.session_state['username']}**")
+    if st.sidebar.button("Logout"):
+        st.session_state.clear()
+        st.rerun()
     
-    tab1, tab2 = st.tabs(["Manage Schedule", "View Bookings"])
+    tab1, tab2, tab3 = st.tabs(["Manage Schedule", "All Bookings", "Manage Users"])
     
+    # TAB 1: SCHEDULE
     with tab1:
         st.subheader("Add New Shuttle Time")
         with st.form("add_schedule"):
-            d = st.date_input("Date")
-            direction = st.selectbox("Direction", ["Venlo -> Office", "Office -> Venlo"])
-            t = st.time_input("Time")
-            cap = st.number_input("Capacity", value=20)
+            col1, col2 = st.columns(2)
+            with col1:
+                d = st.date_input("Date", min_value=date.today())
+                t = st.time_input("Time")
+            with col2:
+                direction = st.selectbox("Direction", ["Venlo -> Office", "Office -> Venlo"])
+                cap = st.number_input("Capacity", value=20, step=1)
             
-            if st.form_submit_button("Add Slot"):
+            if st.form_submit_button("Add to Schedule"):
                 schedule_df = get_data("Schedule")
                 new_row = pd.DataFrame([{
                     "Date": str(d),
@@ -90,104 +115,135 @@ def admin_dashboard():
                 }])
                 updated_df = pd.concat([schedule_df, new_row], ignore_index=True)
                 update_data(updated_df, "Schedule")
-                st.success("Schedule Updated!")
-                
+                st.success(f"Added shuttle for {d} at {t}")
+        
+        st.divider()
+        st.subheader("Current Schedule")
+        st.dataframe(get_data("Schedule"))
+
+    # TAB 2: BOOKINGS
     with tab2:
-        st.subheader("All Bookings")
+        st.subheader("Master Passenger List")
         bookings = get_data("Bookings")
         st.dataframe(bookings)
 
+    # TAB 3: USERS (Optional - just to view)
+    with tab3:
+        st.subheader("User List")
+        st.dataframe(get_data("Users"))
+
 def user_dashboard():
     st.title(f"Welcome, {st.session_state['username']} 👋")
+    st.sidebar.button("Logout", on_click=lambda: st.session_state.clear())
     
-    # Create Tabs for cleaner UI
-    tab1, tab2, tab3 = st.tabs(["🚌 Book a Ride", "📅 My Rides", "🔒 Settings"])
+    tab1, tab2, tab3 = st.tabs(["📅 Book a Ride", "🎟️ My Bookings", "🔒 Settings"])
     
-    # --- TAB 1: BOOKING (Existing Code) ---
+    # TAB 1: BOOKING
     with tab1:
-        st.subheader("Book a Ride")
+        st.subheader("Book a Seat")
+        
         col1, col2 = st.columns(2)
         with col1:
-            date_sel = st.date_input("Date of Trip", min_value=date.today())
+            date_sel = st.date_input("Select Date", min_value=date.today())
         with col2:
-            dir_sel = st.selectbox("Direction", ["Venlo -> Office", "Office -> Venlo"])
+            dir_sel = st.selectbox("Select Direction", ["Venlo -> Office", "Office -> Venlo"])
             
+        # FETCH AND FILTER SCHEDULE
         schedule_df = get_data("Schedule")
         
-        # Ensure 'Date' column is string for comparison
-        schedule_df['Date'] = schedule_df['Date'].astype(str)
-        
-        valid_slots = schedule_df[
-            (schedule_df['Date'] == str(date_sel)) & 
-            (schedule_df['Direction'] == dir_sel)
-        ]
-        
-        if valid_slots.empty:
-            st.warning("No shuttles scheduled for this selection.")
+        if not schedule_df.empty:
+            # Convert date column to string for comparison
+            schedule_df['Date'] = schedule_df['Date'].astype(str)
+            
+            # Filter logic
+            valid_slots = schedule_df[
+                (schedule_df['Date'] == str(date_sel)) & 
+                (schedule_df['Direction'] == dir_sel)
+            ]
+            
+            if valid_slots.empty:
+                st.warning("⚠️ No shuttles found for this specific date and direction.")
+            else:
+                time_choice = st.selectbox("Select Time", valid_slots['Time'].unique())
+                
+                # 2 PM LOCKOUT LOGIC
+                is_late = False
+                # If booking for tomorrow...
+                if date_sel == date.today() + timedelta(days=1):
+                    # ...and it's after 14:00 (2 PM)
+                    if datetime.now().hour >= 14:
+                        is_late = True
+                
+                if st.button("Confirm Booking"):
+                    if is_late:
+                        st.error("❌ Booking for tomorrow is closed (Deadline: 14:00).")
+                    else:
+                        bookings_df = get_data("Bookings")
+                        
+                        # Check if already booked (Optional duplicate check)
+                        # ... (Simple version skips this)
+                        
+                        new_booking = pd.DataFrame([{
+                            "Username": st.session_state['username'],
+                            "Date": str(date_sel),
+                            "Direction": dir_sel,
+                            "Time": str(time_choice),
+                            "Status": "Confirmed",
+                            "Timestamp": str(datetime.now())
+                        }])
+                        
+                        updated_bookings = pd.concat([bookings_df, new_booking], ignore_index=True)
+                        update_data(updated_bookings, "Bookings")
+                        st.balloons()
+                        st.success("✅ Seat Confirmed! check 'My Bookings' tab.")
         else:
-            time_choice = st.selectbox("Select Time", valid_slots['Time'].unique())
-            
-            # 2 PM Check
-            is_late = False
-            # Check if booking is for tomorrow AND current time is past 14:00
-            if date_sel == date.today() + timedelta(days=1):
-                if datetime.now().hour >= 14:
-                    is_late = True
-            
-            if st.button("Confirm Booking"):
-                if is_late:
-                    st.error("❌ It is past 14:00. Booking for tomorrow is closed.")
-                else:
-                    bookings_df = get_data("Bookings")
-                    new_booking = pd.DataFrame([{
-                        "Username": st.session_state['username'],
-                        "Date": str(date_sel),
-                        "Direction": dir_sel,
-                        "Time": str(time_choice),
-                        "Status": "Confirmed",
-                        "Timestamp": str(datetime.now())
-                    }])
-                    updated_bookings = pd.concat([bookings_df, new_booking], ignore_index=True)
-                    update_data(updated_bookings, "Bookings")
-                    st.success("✅ Seat Confirmed!")
+            st.error("Schedule database is empty.")
 
-    # --- TAB 2: MY RIDES (Existing Code) ---
+    # TAB 2: MY BOOKINGS
     with tab2:
         st.subheader("My Upcoming Rides")
-        my_bookings = get_data("Bookings")
-        if not my_bookings.empty:
-            my_rides = my_bookings[my_bookings['Username'] == st.session_state['username']]
-            st.dataframe(my_rides)
+        all_bookings = get_data("Bookings")
+        
+        if not all_bookings.empty:
+            # Filter for logged-in user
+            my_rides = all_bookings[all_bookings['Username'] == st.session_state['username']]
+            
+            if not my_rides.empty:
+                st.dataframe(my_rides)
+                st.info("To cancel, please contact admin (Cancellation feature coming soon).")
+            else:
+                st.info("You have no active bookings.")
         else:
-            st.info("No bookings found.")
+            st.info("No bookings in system.")
 
-    # --- TAB 3: SETTINGS (New Feature!) ---
+    # TAB 3: SETTINGS
     with tab3:
         st.subheader("Change Password")
-        with st.form("pass_change_form"):
-            current_pass = st.text_input("Current Password", type="password")
-            new_pass_1 = st.text_input("New Password", type="password")
-            new_pass_2 = st.text_input("Confirm New Password", type="password")
+        with st.form("pass_change"):
+            curr_pass = st.text_input("Current Password", type="password")
+            new_pass1 = st.text_input("New Password", type="password")
+            new_pass2 = st.text_input("Confirm New Password", type="password")
             
             if st.form_submit_button("Update Password"):
-                if new_pass_1 != new_pass_2:
-                    st.error("❌ New passwords do not match.")
-                elif len(new_pass_1) < 4:
-                    st.error("❌ Password must be at least 4 characters.")
+                if new_pass1 != new_pass2:
+                    st.error("New passwords do not match.")
+                elif len(new_pass1) < 4:
+                    st.error("Password is too short.")
                 else:
-                    # Call the function we wrote in Step 1
-                    success, message = change_password(st.session_state['username'], current_pass, new_pass_1)
+                    success, msg = change_password(st.session_state['username'], curr_pass, new_pass1)
                     if success:
-                        st.success(message)
+                        st.success(msg)
                     else:
-                        st.error(message)
+                        st.error(msg)
 
-    # Logout Button in Sidebar
-    st.sidebar.button("Logout", on_click=lambda: st.session_state.clear())
 # --- MAIN APP ROUTER ---
+
 if 'role' not in st.session_state:
-    login_screen()
-elif st.session_state['role'] == 'admin':
+    st.session_state['role'] = None
+
+if st.session_state['role'] == 'admin':
     admin_dashboard()
-else:
+elif st.session_state['role'] == 'user':
     user_dashboard()
+else:
+    login_screen()
