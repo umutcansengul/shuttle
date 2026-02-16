@@ -16,19 +16,19 @@ except Exception as e:
     st.info("Did you add your secrets to the Streamlit Dashboard correctly?")
     st.stop() # Stop the app here if connection fails
 
-# 3. DEBUG: TEST THE CONNECTION (Optional - Delete after it works)
-st.write("--- DEBUG MODE ---")
+# --- DEBUG MODE: READ ANYTHING ---
+st.write("--- DIAGNOSTIC MODE ---")
 try:
-    # Try to read the 'Users' tab just to see if it works
-    test_df = conn.read(worksheet="Users", ttl=0)
-    st.success("✅ Connection Successful! Found 'Users' tab.")
-    st.dataframe(test_df.head()) # Show first few rows
+    # This reads the very first tab, no matter what it is named
+    df = conn.read(ttl=0)
+    st.success(f"✅ I successfully read the first tab!")
+    st.write("Here are the columns I found:")
+    st.write(df.columns.tolist())
+    st.write("Here is the data:")
+    st.dataframe(df)
 except Exception as e:
-    st.error(f"❌ Connection worked, but could not read 'Users' tab. Error: {e}")
-    st.info("Check: Is your tab named exactly 'Users' (capital U)?")
-st.write("------------------")
-
-
+    st.error(f"❌ Still failing. Detailed Error: {e}")
+st.write("-----------------------")
 
 # --- HELPER FUNCTIONS ---
 
