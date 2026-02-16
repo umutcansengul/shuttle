@@ -6,6 +6,20 @@ from datetime import datetime, timedelta, date
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Shuttle App", page_icon="🚌", layout="wide")
 
+# --- DEBUG SECTION (Delete this later) ---
+st.write("--- DEBUG INFO ---")
+try:
+    # Try to read the Users sheet
+    debug_df = conn.read(worksheet="Users", ttl=0)
+    st.write("What the app sees in 'Users' sheet:")
+    st.dataframe(debug_df)
+    
+    # Check headers
+    st.write(f"Columns found: {debug_df.columns.tolist()}")
+except Exception as e:
+    st.error(f"CRITICAL ERROR: Could not read 'Users' tab. {e}")
+st.write("------------------")
+# -----------------------------------------
 # Connect to Google Sheets
 # This looks for [connections.gsheets] in your .streamlit/secrets.toml
 try:
