@@ -3,30 +3,34 @@ from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 from datetime import datetime, timedelta, date
 
-# --- CONFIGURATION ---
+# 1. SETUP THE PAGE
 st.set_page_config(page_title="Shuttle App", page_icon="🚌", layout="wide")
 
-# --- DEBUG SECTION (Delete this later) ---
-st.write("--- DEBUG INFO ---")
-try:
-    # Try to read the Users sheet
-    debug_df = conn.read(worksheet="Users", ttl=0)
-    st.write("What the app sees in 'Users' sheet:")
-    st.dataframe(debug_df)
-    
-    # Check headers
-    st.write(f"Columns found: {debug_df.columns.tolist()}")
-except Exception as e:
-    st.error(f"CRITICAL ERROR: Could not read 'Users' tab. {e}")
-st.write("------------------")
-# -----------------------------------------
-# Connect to Google Sheets
-# This looks for [connections.gsheets] in your .streamlit/secrets.toml
+# 2. CONNECT TO GOOGLE SHEETS (Crucial Step!)
+# This MUST happen before we try to use 'conn' anywhere else
 try:
     conn = st.connection("gsheets", type=GSheetsConnection)
 except Exception as e:
-    st.error("❌ Connection Error: Could not connect to Google Sheets. Please check your Secrets configuration.")
-    st.stop()
+    st.error("🚨 CRITICAL ERROR: Could not connect to Google Sheets.")
+    st.error(f"Details: {e}")
+    st.info("Did you add your secrets to the Streamlit Dashboard correctly?")
+    st.stop() # Stop the app here if connection fails
+
+# 3. DEBUG: TEST THE CONNECTION (Optional - Delete after it works)
+st.write("--- DEBUG MODE ---")
+try:
+    # Try to read the 'Users' tab just to see if it works
+    test_df = conn.read(worksheet="Users", ttl=0)
+    st.success("✅ Connection Successful! Found 'Users' tab.")
+    st.dataframe(test_df.head()) # Show first few rows
+except Exception as e:
+    st.error(f"❌ Connection worked, but could not read 'Users' tab. Error: {e}")
+    st.info("Check: Is your tab named exactly 'Users' (capital U)?")
+st.write("------------------")
+
+# 4. HELPER FUNCTIONS
+def get_data(worksheet_name):
+    # ... rest of your code ...
 
 # --- HELPER FUNCTIONS ---
 
