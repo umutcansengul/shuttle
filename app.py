@@ -28,9 +28,7 @@ except Exception as e:
     st.info("Check: Is your tab named exactly 'Users' (capital U)?")
 st.write("------------------")
 
-# 4. HELPER FUNCTIONS
-def get_data(worksheet_name):
-    # ... rest of your code ...
+
 
 # --- HELPER FUNCTIONS ---
 
