@@ -150,71 +150,90 @@ def admin_dashboard():
 
 def user_dashboard():
     st.title(f"Welcome, {st.session_state['username']} 👋")
-    st.sidebar.button("Logout", on_click=lambda: st.session_state.clear())
-    
     tab1, tab2, tab3 = st.tabs(["📅 Book a Ride", "🎟️ My Bookings", "🔒 Settings"])
     
-    # TAB 1: BOOKING
+    # 1. FETCH DATA
+    schedule_df = get_data("Schedule")
+    bookings_df = get_data("Bookings")
+    
+    # Clean up dates to ensure they match (YYYY-MM-DD)
+    schedule_df['Date'] = pd.to_datetime(schedule_df['Date']).dt.strftime('%Y-%m-%d')
+    if not bookings_df.empty:
+        bookings_df['Date'] = pd.to_datetime(bookings_df['Date']).dt.strftime('%Y-%m-%d')
+
     with tab1:
-        st.subheader("Book a Seat")
+        st.subheader("Shuttle Booking")
         
-        col1, col2 = st.columns(2)
-        with col1:
-            date_sel = st.date_input("Select Date", min_value=date.today())
-        with col2:
-            dir_sel = st.selectbox("Select Direction", ["Venlo -> Office", "Office -> Venlo"])
-            
-        # FETCH AND FILTER SCHEDULE
-        schedule_df = get_data("Schedule")
+        # OFFICE SELECTION (Now the primary filter)
+        office_sel = st.selectbox("Select Office", ["MMC", "MKI"])
         
-        if not schedule_df.empty:
-            # Convert date column to string for comparison
-            schedule_df['Date'] = schedule_df['Date'].astype(str)
-            
-            # Filter logic
-            valid_slots = schedule_df[
-                (schedule_df['Date'] == str(date_sel)) & 
-                (schedule_df['Direction'] == dir_sel)
+        # DATE SELECTION
+        # We start with a normal date picker
+        date_sel = st.date_input("Select Date", min_value=date.today())
+        date_str = date_sel.strftime('%Y-%m-%d')
+
+        # --- THE RESTRICTION ENGINE ---
+        # Find what the user has ALREADY booked for this specific day
+        user_day_bookings = pd.DataFrame()
+        if not bookings_df.empty:
+            user_day_bookings = bookings_df[
+                (bookings_df['Username'] == st.session_state['username']) & 
+                (bookings_df['Date'] == date_str) &
+                (bookings_df['Status'] != "Cancelled")
             ]
-            
-            if valid_slots.empty:
-                st.warning("⚠️ No shuttles found for this specific date and direction.")
+
+        # Check existing directions
+        has_booked_to_office = not user_day_bookings[user_day_bookings['Direction'].str.contains("to Office")].empty
+        has_booked_to_venlo = not user_day_bookings[user_day_bookings['Direction'].str.contains("to Venlo")].empty
+
+        if has_booked_to_office and has_booked_to_venlo:
+            st.error(f"🚫 You are fully booked for {date_str}. Both directions are reserved.")
+        else:
+            # Filter schedule for this office and date
+            available_slots = schedule_df[
+                (schedule_df['Date'] == date_str) & 
+                (schedule_df['Office'] == office_sel) # Ensure your Schedule sheet has an 'Office' column!
+            ]
+
+            # Remove the directions the user has already booked
+            if has_booked_to_office:
+                available_slots = available_slots[~available_slots['Direction'].str.contains("to Office")]
+                st.info("ℹ️ You already have a morning booking. Only return trips are shown.")
+            if has_booked_to_venlo:
+                available_slots = available_slots[~available_slots['Direction'].str.contains("to Venlo")]
+                st.info("ℹ️ You already have a return booking. Only morning trips are shown.")
+
+            if available_slots.empty:
+                st.warning("No shuttles available for this selection.")
             else:
-                time_choice = st.selectbox("Select Time", valid_slots['Time'].unique())
+                # Combine Direction and Time for easy selection
+                available_slots['Display'] = available_slots['Direction'] + " @ " + available_slots['Time']
+                selection = st.selectbox("Available Shuttles", available_slots['Display'].unique())
                 
-                # 2 PM LOCKOUT LOGIC
-                is_late = False
-                # If booking for tomorrow...
-                if date_sel == date.today() + timedelta(days=1):
-                    # ...and it's after 14:00 (2 PM)
-                    if datetime.now().hour >= 14:
-                        is_late = True
-                
-                if st.button("Confirm Booking"):
+                # Extract chosen row
+                chosen_row = available_slots[available_slots['Display'] == selection].iloc[0]
+
+                # 2 PM LOCKOUT
+                is_late = (date_sel == date.today() + timedelta(days=1)) and (datetime.now().hour >= 14)
+
+                if st.button("Book Seat"):
                     if is_late:
-                        st.error("❌ Booking for tomorrow is closed (Deadline: 14:00).")
+                        st.error("❌ Past 14:00 deadline for tomorrow's booking.")
                     else:
-                        bookings_df = get_data("Bookings")
-                        
-                        # Check if already booked (Optional duplicate check)
-                        # ... (Simple version skips this)
-                        
                         new_booking = pd.DataFrame([{
                             "Username": st.session_state['username'],
-                            "Date": str(date_sel),
-                            "Direction": dir_sel,
-                            "Time": str(time_choice),
+                            "Date": date_str,
+                            "Office": office_sel,
+                            "Direction": chosen_row['Direction'],
+                            "Time": chosen_row['Time'],
                             "Status": "Confirmed",
                             "Timestamp": str(datetime.now())
                         }])
-                        
-                        updated_bookings = pd.concat([bookings_df, new_booking], ignore_index=True)
-                        update_data(updated_bookings, "Bookings")
-                        st.balloons()
-                        st.success("✅ Seat Confirmed! check 'My Bookings' tab.")
-        else:
-            st.error("Schedule database is empty.")
+                        update_data(pd.concat([bookings_df, new_booking]), "Bookings")
+                        st.success("✅ Seat Reserved!")
+                        st.rerun()
 
+    # (TAB 2 and TAB 3 remain the same as previous steps)
     # TAB 2: MY BOOKINGS
     with tab2:
         st.subheader("My Upcoming Rides")
